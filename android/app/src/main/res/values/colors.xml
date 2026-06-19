@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- X Branding Colors -->
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="x_black">#FF000000</color>
+    <color name="x_white">#FFFFFFFF</color>
+    
+    <!-- Dark Theme Colors -->
+    <color name="gray_950">#FF030712</color>
+    <color name="gray_900">#FF111827</color>
+    <color name="gray_800">#FF1F2937</color>
+    <color name="gray_700">#FF374151</color>
+    <color name="gray_600">#FF4B5563</color>
+    <color name="gray_500">#FF6B7280</color>
+    <color name="gray_400">#FF9CA3AF</color>
+    
+    <!-- Status Colors -->
+    <color name="green_500">#FF22C55E</color>
+    <color name="red_500">#FFEF4444</color>
+    <color name="red_900">#FF7F1D1D</color>
+</resources>
