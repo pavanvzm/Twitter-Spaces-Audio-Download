@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>X Spaces Downloader</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #030712;
+            color: #ffffff;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+        
+        header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        
+        .logo {
+            width: 64px;
+            height: 64px;
+            margin: 0 auto 16px;
+        }
+        
+        h1 {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+        
+        .subtitle {
+            color: #9ca3af;
+            font-size: 14px;
+        }
+        
+        .card {
+            background: #111827;
+            border: 1px solid #1f2937;
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 20px;
+        }
+        
+        .input-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            font-size: 14px;
+            font-weight: 500;
+            color: #d1d5db;
+            margin-bottom: 8px;
+        }
+        
+        .input-wrapper {
+            position: relative;
+        }
+        
+        .input-icon {
+            position: absolute;
+            left: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #6b7280;
+        }
+        
+        input[type="text"] {
+            width: 100%;
+            padding: 16px 16px 16px 48px;
+            background: #1f2937;
+            border: 1px solid #374151;
+            border-radius: 12px;
+            color: #ffffff;
+            font-size: 16px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        
+        input[type="text"]:focus {
+            border-color: #ffffff;
+        }
+        
+        input[type="text"]::placeholder {
+            color: #6b7280;
+        }
+        
+        .formats {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+        
+        .format-btn {
+            flex: 1;
+            padding: 12px;
+            background: #1f2937;
+            border: 1px solid #374151;
+            border-radius: 8px;
+            color: #d1d5db;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .format-btn.active {
+            background: #ffffff;
+            color: #000000;
+        }
+        
+        .download-btn {
+            width: 100%;
+            padding: 16px;
+            background: #000000;
+            border: none;
+            border-radius: 12px;
+            color: #ffffff;
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        
+        .download-btn:hover {
+            background: #1f2937;
+        }
+        
+        .download-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .download-btn .spinner {
+            width: 20px;
+            height: 20px;
+            border: 2px solid #ffffff;
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .space-info {
+            margin-top: 20px;
+            padding: 16px;
+            background: #1f2937;
+            border-radius: 12px;
+            display: none;
+        }
+        
+        .space-info.visible {
+            display: block;
+        }
+        
+        .space-info h3 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        
+        .space-info p {
+            font-size: 14px;
+            color: #9ca3af;
+            margin-bottom: 8px;
+        }
+        
+        .space-meta {
+            display: flex;
+            gap: 12px;
+            font-size: 12px;
+            color: #6b7280;
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .status-ended {
+            background: rgba(34, 197, 94, 0.2);
+            color: #22c55e;
+        }
+        
+        .status-live {
+            background: rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .error {
+            padding: 16px;
+            background: rgba(127, 29, 29, 0.3);
+            border: 1px solid #7f1d1d;
+            border-radius: 12px;
+            color: #ef4444;
+            margin-bottom: 20px;
+            display: none;
+        }
+        
+        .error.visible {
+            display: block;
+        }
+        
+        .progress-container {
+            margin-top: 20px;
+            display: none;
+        }
+        
+        .progress-container.visible {
+            display: block;
+        }
+        
+        .progress-bar {
+            height: 8px;
+            background: #1f2937;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: #ffffff;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        
+        .progress-text {
+            margin-top: 8px;
+            font-size: 12px;
+            color: #9ca3af;
+            display: flex;
+            justify-content: space-between;
+        }
+        
+        .instructions {
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            border-radius: 12px;
+            padding: 20px;
+        }
+        
+        .instructions h3 {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: #60a5fa;
+        }
+        
+        .instructions ol {
+            font-size: 13px;
+            color: #9ca3af;
+            padding-left: 20px;
+        }
+        
+        .instructions li {
+            margin-bottom: 6px;
+        }
+        
+        .guest-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            background: rgba(34, 197, 94, 0.2);
+            color: #22c55e;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .footer {
+            text-align: center;
+            margin-top: 32px;
+            font-size: 12px;
+            color: #4b5563;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <svg class="logo" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+            </svg>
+            <h1>Download X Spaces</h1>
+            <p class="subtitle">Paste any X Space link to download the recording</p>
+        </header>
+        
+        <div class="card">
+            <div class="input-group">
+                <label>X Space URL</label>
+                <div class="input-wrapper">
+                    <svg class="input-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                        <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                    </svg>
+                    <input type="text" id="spaceUrl" placeholder="https://twitter.com/i/spaces/1RDxlkAORPVJL">
+                </div>
+            </div>
+            
+            <div class="formats">
+                <button class="format-btn active" data-format="mp3">MP3</button>
+                <button class="format-btn" data-format="wav">WAV</button>
+                <button class="format-btn" data-format="m4a">M4A</button>
+            </div>
+            
+            <div class="error" id="error"></div>
+            
+            <button class="download-btn" id="downloadBtn" disabled>
+                <span id="btnText">Enter a Space URL</span>
+            </button>
+            
+            <div class="space-info" id="spaceInfo">
+                <h3 id="spaceTitle">Loading...</h3>
+                <p id="spaceHost">by @user</p>
+                <div class="space-meta">
+                    <span class="status-badge" id="spaceStatus">Ended</span>
+                    <span id="spaceDuration">0:00</span>
+                    <span id="spaceParticipants">0 participants</span>
+                </div>
+            </div>
+            
+            <div class="progress-container" id="progressContainer">
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill"></div>
+                </div>
+                <div class="progress-text">
+                    <span id="progressStatus">Downloading...</span>
+                    <span id="progressPercent">0%</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="instructions">
+            <h3>How to get a Space URL</h3>
+            <ol>
+                <li>Open X and find the Space you want to download</li>
+                <li>Tap the share icon on the Space</li>
+                <li>Select "Copy link"</li>
+                <li>Paste the link in the field above</li>
+            </ol>
+        </div>
+        
+        <div class="footer">
+            <span class="guest-badge">Guest Mode</span>
+            <p style="margin-top: 8px;">Some private Spaces may not be available</p>
+        </div>
+    </div>
+    
+    <script>
+        // X Spaces Downloader - Demo UI
+        // This is a standalone demo that shows the UI flow
+        
+        const API_BASE = 'http://localhost:3001/api';
+        
+        let selectedFormat = 'mp3';
+        let currentSpace = null;
+        let downloadState = 'idle'; // idle, downloading, completed, failed
+        
+        // DOM Elements
+        const spaceUrlInput = document.getElementById('spaceUrl');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const btnText = document.getElementById('btnText');
+        const errorDiv = document.getElementById('error');
+        const spaceInfo = document.getElementById('spaceInfo');
+        const spaceTitle = document.getElementById('spaceTitle');
+        const spaceHost = document.getElementById('spaceHost');
+        const spaceStatus = document.getElementById('spaceStatus');
+        const spaceDuration = document.getElementById('spaceDuration');
+        const spaceParticipants = document.getElementById('spaceParticipants');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressFill = document.getElementById('progressFill');
+        const progressStatus = document.getElementById('progressStatus');
+        const progressPercent = document.getElementById('progressPercent');
+        
+        // Format buttons
+        document.querySelectorAll('.format-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.format-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                selectedFormat = btn.dataset.format;
+            });
+        });
+        
+        // URL validation
+        let debounceTimer;
+        spaceUrlInput.addEventListener('input', () => {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(validateUrl, 800);
+        });
+        
+        function showError(message) {
+            errorDiv.textContent = message;
+            errorDiv.classList.add('visible');
+            spaceInfo.classList.remove('visible');
+            downloadBtn.disabled = true;
+        }
+        
+        function hideError() {
+            errorDiv.classList.remove('visible');
+        }
+        
+        async function validateUrl() {
+            const url = spaceUrlInput.value.trim();
+            
+            if (!url) {
+                hideError();
+                spaceInfo.classList.remove('visible');
+                downloadBtn.disabled = true;
+                btnText.textContent = 'Enter a Space URL';
+                currentSpace = null;
+                return;
+            }
+            
+            // Extract Space ID from URL
+            const patterns = [
+                /twitter\.com\/i\/spaces\/([A-Za-z0-9]+)/,
+                /x\.com\/i\/spaces\/([A-Za-z0-9]+)/
+            ];
+            
+            let spaceId = null;
+            for (const pattern of patterns) {
+                const match = url.match(pattern);
+                if (match && match[1]) {
+                    spaceId = match[1];
+                    break;
+                }
+            }
+            
+            if (!spaceId) {
+                showError('Invalid Space URL. Use format: twitter.com/i/spaces/XXXXX');
+                return;
+            }
+            
+            hideError();
+            btnText.textContent = 'Validating...';
+            
+            try {
+                const response = await fetch(`${API_BASE}/spaces/${spaceId}`);
+                
+                if (!response.ok) {
+                    if (response.status === 404) {
+                        showError('Space not found, private, or still live');
+                    } else if (response.status === 429) {
+                        showError('Too many requests. Please wait a moment.');
+                    } else {
+                        showError('Failed to fetch Space information');
+                    }
+                    return;
+                }
+                
+                const data = await response.json();
+                currentSpace = data;
+                
+                // Show space info
+                spaceTitle.textContent = data.title || 'Untitled Space';
+                spaceHost.textContent = `by @${data.host?.username || 'unknown'}`;
+                
+                const statusText = data.status === 'live' ? 'LIVE' : 
+                                   data.status === 'ended' ? 'Ended' : 
+                                   data.status || 'Unknown';
+                spaceStatus.textContent = statusText;
+                spaceStatus.className = `status-badge status-${data.status}`;
+                
+                if (data.duration) {
+                    const mins = Math.floor(data.duration / 60);
+                    const secs = data.duration % 60;
+                    spaceDuration.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
+                } else {
+                    spaceDuration.textContent = '';
+                }
+                
+                if (data.participantCount > 0) {
+                    spaceParticipants.textContent = `${data.participantCount.toLocaleString()} participants`;
+                } else {
+                    spaceParticipants.textContent = '';
+                }
+                
+                spaceInfo.classList.add('visible');
+                
+                // Enable download button
+                if (data.status !== 'live') {
+                    downloadBtn.disabled = false;
+                    btnText.textContent = `Download ${selectedFormat.toUpperCase()}`;
+                } else {
+                    downloadBtn.disabled = true;
+                    btnText.textContent = 'Cannot download live Spaces';
+                }
+                
+            } catch (err) {
+                showError('Cannot connect to server. Make sure the backend is running.');
+                console.error(err);
+            }
+        }
+        
+        // Download handler
+        downloadBtn.addEventListener('click', async () => {
+            if (!currentSpace || downloadState === 'downloading') return;
+            
+            downloadState = 'downloading';
+            downloadBtn.disabled = true;
+            progressContainer.classList.add('visible');
+            btnText.textContent = 'Downloading...';
+            
+            let progress = 0;
+            const progressInterval = setInterval(() => {
+                progress += Math.random() * 15;
+                if (progress > 100) progress = 100;
+                
+                progressFill.style.width = `${progress}%`;
+                progressPercent.textContent = `${Math.round(progress)}%`;
+                
+                if (progress < 30) {
+                    progressStatus.textContent = 'Fetching audio...';
+                } else if (progress < 70) {
+                    progressStatus.textContent = 'Downloading segments...';
+                } else if (progress < 95) {
+                    progressStatus.textContent = 'Processing audio...';
+                } else {
+                    progressStatus.textContent = 'Finalizing...';
+                }
+                
+                if (progress >= 100) {
+                    clearInterval(progressInterval);
+                    progressStatus.textContent = 'Complete!';
+                    btnText.textContent = 'Download Again';
+                    downloadBtn.disabled = false;
+                    downloadState = 'idle';
+                }
+            }, 500);
+        });
+    </script>
+</body>
+</html>

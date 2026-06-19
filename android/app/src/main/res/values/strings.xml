@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">X Spaces Downloader</string>
+    <string name="login_with_x">Login with X</string>
+    <string name="download_space">Download Space</string>
+    <string name="space_url_hint">Paste X Space URL here</string>
+    <string name="download">Download</string>
+    <string name="downloading">Downloading...</string>
+    <string name="completed">Completed</string>
+    <string name="failed">Failed</string>
+    <string name="logout">Logout</string>
+    <string name="library">Library</string>
+    <string name="home">Home</string>
+    <string name="download_complete">Download Complete</string>
+    <string name="download_failed">Download Failed</string>
+    <string name="notification_channel_name">Downloads</string>
+    <string name="notification_channel_description">Download progress notifications</string>
+    <string name="download_in_progress">Download in progress</string>
+    <string name="select_format">Select Format</string>
+    <string name="cancel">Cancel</string>
+    <string name="delete">Delete</string>
+    <string name="share">Share</string>
+    <string name="no_downloads">No downloads yet</string>
+    <string name="privacy_notice">We only request read access to your X account.</string>
+</resources>
