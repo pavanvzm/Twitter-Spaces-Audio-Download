@@ -1,0 +1,17 @@
+# Render.com Blueprint
+# Deploy at: https://render.com/blueprints
+
+services:
+  - type: web
+    name: x-spaces-downloader
+    env: node
+    region: oregon
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
