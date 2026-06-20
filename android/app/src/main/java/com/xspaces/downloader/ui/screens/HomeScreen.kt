@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalMaterial3Api::class)
+
 package com.xspaces.downloader.ui.screens
 
 import androidx.compose.foundation.background
@@ -29,7 +31,6 @@ import com.xspaces.downloader.data.model.User
 import com.xspaces.downloader.ui.components.DownloadCard
 import com.xspaces.downloader.ui.theme.*
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     onLogout: () -> Unit,
@@ -224,7 +225,8 @@ fun HomeScreen(
                 Spacer(modifier = Modifier.height(12.dp))
                 DownloadCard(
                     download = uiState.activeDownload!!,
-                    onSaveClick = { viewModel.saveFile(uiState.activeDownload!!.id) }
+                    onSaveClick = { viewModel.saveFile(uiState.activeDownload!!.id) },
+                    onDeleteClick = null
                 )
             }
 

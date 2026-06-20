@@ -1,28 +1,17 @@
 /**
- * Download Routes - Audio Stream Processing
+ * Download Routes - Audio Stream Processing using yt-dlp
  * 
- * Former X Staff Engineering Insight:
- * Space audio is delivered as segmented HLS streams (AAC in MPEG-TS containers).
- * Each segment is typically 6-12 seconds. To create a single audio file:
- * 
- * 1. Fetch the .m3u8 manifest (playlist)
- * 2. Parse segment URLs from the manifest
- * 3. Download segments with proper headers (auth token required)
- * 4. Concatenate segments using FFmpeg
- * 5. Convert to desired format (MP3/WAV)
- * 
- * This approach mirrors how X's own players reconstruct audio for playback.
+ * Uses yt-dlp to handle Twitter/X Space downloads:
+ * - Handles authentication and API complexity
+ * - Extracts audio and converts to desired format
+ * - Progress tracking and status reporting
  */
 
 import express from 'express';
 import path from 'path';
 import fs from 'fs/promises';
-import { pipeline } from 'stream/promises';
 import { v4 as uuidv4 } from 'uuid';
-import ffmpeg from 'fluent-ffmpeg';
-import { getSessionByToken } from './auth.js';
-import { fetchSpaceMetadata, fetchSpaceAudioUrl } from '../services/twitter.js';
-import { downloadAudioSegments, parseM3U8 } from '../services/audioExtractor.js';
+import { downloadSpace, checkYtDlp } from '../services/audioExtractor.js';
 import { logger } from '../utils/logger.js';
 import { downloadRateLimiter } from '../middleware/rateLimit.js';
 
@@ -40,16 +29,16 @@ async function ensureDownloadDir() {
   }
 }
 
+// In-memory task storage
+const downloadTasks = new Map();
+
 /**
  * POST /api/download/start
- * Start a download task for a Space using guest token (no auth required)
- * 
- * This initiates the download process. For large Spaces, this runs
- * asynchronously and returns a task ID for progress tracking.
+ * Start a download task for a Space using yt-dlp
  */
 router.post('/start', downloadRateLimiter, async (req, res) => {
   try {
-    const { spaceId, format = 'mp3', quality = 'high' } = req.body;
+    const { spaceId, format = 'mp3' } = req.body;
 
     if (!spaceId) {
       return res.status(400).json({
@@ -58,61 +47,55 @@ router.post('/start', downloadRateLimiter, async (req, res) => {
       });
     }
 
+    // Validate space ID format
+    if (!/^[A-Za-z0-9]+$/.test(spaceId)) {
+      return res.status(400).json({
+        error: 'Invalid Space ID format',
+        code: 'INVALID_SPACE_ID'
+      });
+    }
+
+    // Check if yt-dlp is available
+    const ytDlpAvailable = await checkYtDlp();
+    if (!ytDlpAvailable) {
+      return res.status(503).json({
+        error: 'yt-dlp is not available',
+        code: 'YTDLP_NOT_AVAILABLE',
+        details: 'Please install yt-dlp: pip install yt-dlp'
+      });
+    }
+
     await ensureDownloadDir();
 
     // Create task
     const taskId = uuidv4();
-    const outputPath = path.join(DOWNLOAD_DIR, `${taskId}.${format}`);
-
-    // Fetch Space metadata using guest token (no auth required)
-    const metadata = await fetchSpaceMetadata(null, spaceId);
-    if (!metadata) {
-      return res.status(404).json({
-        error: 'Space not found or not accessible',
-        code: 'SPACE_NOT_FOUND'
-      });
-    }
-
-    // Get audio URL using guest token
-    const audioData = await fetchSpaceAudioUrl(null, spaceId);
-    if (!audioData) {
-      return res.status(400).json({
-        error: 'Audio not available',
-        code: 'AUDIO_UNAVAILABLE',
-        details: 'This Space may still be live, private, or recording is restricted'
-      });
-    }
 
     // Initialize task
     const task = {
       id: taskId,
       spaceId,
-      metadata,
+      metadata: {
+        title: `Space ${spaceId}`,
+      },
       status: 'pending',
       progress: 0,
       format,
-      quality,
-      outputPath,
+      outputPath: null,
       createdAt: Date.now(),
     };
 
-    // Store task in memory (use Redis/DB in production)
+    // Store task in memory
     downloadTasks.set(taskId, task);
 
-    // Start async download (uses guest token internally)
-    processDownload(taskId, audioData.audioUrl, null);
+    // Start async download
+    processDownload(taskId);
 
-    logger.info(`Download started (guest token): ${spaceId} -> ${taskId}`);
+    logger.info(`Download started: ${spaceId} -> ${taskId}`);
 
     res.json({
       success: true,
       taskId,
-      metadata: {
-        title: metadata.title,
-        host: metadata.host,
-        duration: metadata.duration,
-        startedAt: metadata.startedAt,
-      },
+      metadata: task.metadata,
       status: 'pending',
     });
   } catch (error) {
@@ -183,27 +166,50 @@ router.get('/:taskId/file', async (req, res) => {
       });
     }
 
-    // Check if file exists
-    try {
-      await fs.access(task.outputPath);
-    } catch {
+    // Check if file exists - try multiple paths
+    let actualPath = task.outputPath;
+    let fileExists = false;
+    
+    // Try the direct path first
+    if (actualPath) {
+      try {
+        await fs.access(actualPath);
+        fileExists = true;
+      } catch {
+        actualPath = null;
+      }
+    }
+    
+    // Try to find by space ID prefix
+    if (!fileExists) {
+      const files = await fs.readdir(DOWNLOAD_DIR);
+      const matching = files.find(f => f.startsWith(task.spaceId) && !f.endsWith('.part') && !f.endsWith('.temp'));
+      if (matching) {
+        actualPath = path.join(DOWNLOAD_DIR, matching);
+        task.outputPath = actualPath;
+        fileExists = true;
+      }
+    }
+    
+    if (!fileExists || !actualPath) {
       return res.status(404).json({
-        error: 'File not found',
+        error: 'File not found on disk',
         code: 'FILE_NOT_FOUND'
       });
     }
 
     // Generate filename from metadata
-    const safeName = (task.metadata?.title || 'space')
+    const safeName = (task.metadata?.title || task.spaceId)
       .replace(/[^a-zA-Z0-9]/g, '_')
       .substring(0, 50);
-    const filename = `${safeName}.${task.format}`;
+    const ext = path.extname(actualPath).slice(1) || task.format;
+    const filename = `${safeName}.${ext}`;
 
-    res.setHeader('Content-Type', `audio/${task.format === 'mp3' ? 'mpeg' : task.format}`);
+    res.setHeader('Content-Type', `audio/${ext === 'mp3' ? 'mpeg' : ext}`);
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     
-    const fileStream = await fs.readFile(task.outputPath);
-    res.send(fileStream);
+    const fileBuffer = await fs.readFile(actualPath);
+    res.send(fileBuffer);
   } catch (error) {
     logger.error('Download file error:', error);
     res.status(500).json({
@@ -230,10 +236,12 @@ router.delete('/:taskId', async (req, res) => {
     }
 
     // Delete file if exists
-    try {
-      await fs.unlink(task.outputPath);
-    } catch {
-      // File may not exist
+    if (task.outputPath) {
+      try {
+        await fs.unlink(task.outputPath);
+      } catch {
+        // File may not exist
+      }
     }
 
     // Remove from tasks
@@ -245,16 +253,16 @@ router.delete('/:taskId', async (req, res) => {
   } catch (error) {
     logger.error('Delete task error:', error);
     res.status(500).json({
-      error: 'Failed to delete task',
+      error: 'Failed to delete download',
       code: 'DELETE_FAILED'
     });
   }
 });
 
 /**
- * Process download asynchronously
+ * Process download asynchronously using yt-dlp
  */
-async function processDownload(taskId, audioUrl, accessToken) {
+async function processDownload(taskId) {
   const task = downloadTasks.get(taskId);
   if (!task) return;
 
@@ -262,37 +270,31 @@ async function processDownload(taskId, audioUrl, accessToken) {
     task.status = 'downloading';
     task.progress = 0;
 
-    logger.info(`Starting download: ${taskId}`);
+    logger.info(`Starting yt-dlp download: ${taskId} for Space: ${task.spaceId}`);
 
-    // Download and process audio
-    const result = await downloadAudioSegments(
-      audioUrl,
-      accessToken,
+    // Download using yt-dlp
+    const result = await downloadSpace(
+      task.spaceId,
       task.format,
       (progress) => {
-        task.progress = progress;
+        task.progress = Math.min(progress, 95);
       }
     );
 
-    // Move temp file to final location
-    await fs.rename(result.tempPath, task.outputPath);
-    
-    // Get file size
-    const stats = await fs.stat(task.outputPath);
-    task.fileSize = stats.size;
-
+    // Update task with result
+    task.outputPath = result.path;
+    task.fileSize = result.size;
     task.status = 'completed';
     task.progress = 100;
+    task.metadata.format = result.format;
 
-    logger.info(`Download completed: ${taskId}, size: ${task.fileSize}`);
+    logger.info(`Download completed: ${taskId}, size: ${task.fileSize}, path: ${result.path}`);
   } catch (error) {
     logger.error(`Download failed: ${taskId}`, error);
     task.status = 'failed';
     task.error = error.message;
+    task.progress = 0;
   }
 }
-
-// In-memory task storage
-const downloadTasks = new Map();
 
 export default router;

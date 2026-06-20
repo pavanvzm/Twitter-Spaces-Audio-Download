@@ -16,6 +16,15 @@ import kotlinx.coroutines.launch
 import java.io.File
 import javax.inject.Inject
 
+data class DownloadHistoryItem(
+    val taskId: String,
+    val spaceId: String,
+    val title: String,
+    val format: String,
+    val fileSize: Long,
+    val downloadedAt: Long
+)
+
 data class DownloadsUiState(
     val downloads: List<DownloadTask> = emptyList(),
     val isLoading: Boolean = false,

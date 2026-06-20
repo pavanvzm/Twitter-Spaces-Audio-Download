@@ -14,7 +14,7 @@
 
 import express from 'express';
 import { fetchSpaceMetadata, fetchSpaceAudioUrl, getAuthenticatedClient } from '../services/twitter.js';
-import { getSessionByToken } from './auth.js';
+import { getSessionByToken } from '../services/session.js';
 import { cacheGet, cacheSet } from '../services/cache.js';
 import { logger } from '../utils/logger.js';
 import { spacesRateLimiter } from '../middleware/rateLimit.js';

@@ -5,14 +5,18 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.xspaces.downloader.data.model.AuthState
 import com.xspaces.downloader.data.model.User
-import com.xspaces.downloader.data.model.AuthResult
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import net.openid.appauth.AuthorizationService
-import net.openid.appauth.TokenRequest
 import javax.inject.Inject
 import javax.inject.Singleton
+
+data class AuthResult(
+    val user: User,
+    val accessToken: String,
+    val refreshToken: String,
+    val expiresAt: Long
+)
 
 @Singleton
 class AuthRepository @Inject constructor(
@@ -137,10 +141,3 @@ class AuthRepository @Inject constructor(
             .apply()
     }
 }
-
-data class AuthResult(
-    val user: User,
-    val accessToken: String,
-    val refreshToken: String,
-    val expiresAt: Long
-)
