@@ -149,7 +149,7 @@ fun DownloadCard(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 LinearProgressIndicator(
-                    progress = { download.progress / 100f },
+                    progress = download.progress / 100f,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(4.dp)

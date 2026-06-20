@@ -61,7 +61,7 @@ class DownloadRepository @Inject constructor(
         true
     }
 
-    suspend fun getDownloadHistory(): List<DownloadHistoryItem> = withContext(Dispatchers.IO) {
+    suspend fun getDownloadHistory(): List<com.xspaces.downloader.data.model.DownloadTask> = withContext(Dispatchers.IO) {
         // In production, get from database or backend
         emptyList()
     }

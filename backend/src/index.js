@@ -17,6 +17,7 @@ import { dirname, join } from 'path';
 import authRoutes from './routes/auth.js';
 import spacesRoutes from './routes/spaces.js';
 import downloadRoutes from './routes/download.js';
+import apiRoutes from './routes/api.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { rateLimiter } from './middleware/rateLimit.js';
 import { securityHeaders } from './middleware/security.js';
@@ -83,8 +84,17 @@ app.get('/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/spaces', spacesRoutes);
 app.use('/api/download', downloadRoutes);
+app.use('/api', apiRoutes);
 
-// Serve static files in production
+// Serve static files from parent directory (for simple index.html)
+app.use(express.static(join(__dirname, '../../')));
+
+// Serve simple index.html for the main route
+app.get('/', (req, res) => {
+  res.sendFile(join(__dirname, '../../index.html'));
+});
+
+// Serve React app in production
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(join(__dirname, '../../web/dist')));
 }

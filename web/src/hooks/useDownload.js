@@ -38,7 +38,7 @@ export const useDownloadStore = create((set, get) => ({
         id: data.taskId,
         spaceId,
         metadata: data.metadata,
-        status: data.status,
+        status: 'pending',
         progress: 0,
         format,
       };
@@ -54,14 +54,24 @@ export const useDownloadStore = create((set, get) => ({
       return data;
     } catch (error) {
       set({ isDownloading: false });
-      throw error;
+      
+      // Extract useful error message
+      const errorMsg = error.response?.data?.error || 
+                       error.response?.data?.details ||
+                       error.message ||
+                       'Failed to start download';
+      
+      toast.error(errorMsg);
+      throw new Error(errorMsg);
     }
   },
 
   // Poll for download progress
-  pollProgress: async (taskId) => {
+  pollProgress: async (taskId, maxAttempts = 120) => {
+    let attempts = 0;
     const poll = async () => {
       try {
+        attempts++;
         const { data } = await api.get(`/download/${taskId}`);
         
         set((state) => ({
@@ -72,25 +82,34 @@ export const useDownloadStore = create((set, get) => ({
           ),
           activeDownload:
             state.activeDownload?.id === taskId
-              ? { ...state.activeDownload, status: data.status, progress: data.progress }
+              ? { ...state.activeDownload, status: data.status, progress: data.progress, error: data.error }
               : state.activeDownload,
           isDownloading: data.status === 'downloading' || data.status === 'processing',
         }));
 
         // Handle completion or failure
         if (data.status === 'completed') {
-          toast.success('Download complete!');
-          set({ isDownloading: false, activeDownload: null });
+          toast.success('Download complete! Click to save the file.');
+          set({ isDownloading: false });
         } else if (data.status === 'failed') {
-          toast.error(data.error || 'Download failed');
-          set({ isDownloading: false, activeDownload: null });
-        } else if (data.status === 'downloading' || data.status === 'processing') {
-          // Continue polling
-          setTimeout(poll, 1000);
+          const errorMsg = data.error || 'Download failed';
+          toast.error(errorMsg);
+          set({ isDownloading: false });
+        } else if (data.status === 'pending' || data.status === 'downloading' || data.status === 'processing') {
+          // Continue polling (max 2 minutes)
+          if (attempts < maxAttempts) {
+            setTimeout(poll, 1000);
+          } else {
+            toast.error('Download timed out');
+            set({ isDownloading: false });
+          }
         }
       } catch (error) {
         console.error('Poll error:', error);
-        set({ isDownloading: false, activeDownload: null });
+        // Don't stop polling on network errors, just continue
+        if (attempts < maxAttempts) {
+          setTimeout(poll, 2000); // Longer interval on error
+        }
       }
     };
 
@@ -122,8 +141,9 @@ export const useDownloadStore = create((set, get) => ({
 
       toast.success('File downloaded');
     } catch (error) {
-      toast.error('Failed to download file');
-      throw error;
+      const errorMsg = error.response?.data?.error || 'Failed to download file';
+      toast.error(errorMsg);
+      throw new Error(errorMsg);
     }
   },
 
@@ -134,6 +154,7 @@ export const useDownloadStore = create((set, get) => ({
       
       set((state) => ({
         downloads: state.downloads.filter((d) => d.id !== taskId),
+        activeDownload: state.activeDownload?.id === taskId ? null : state.activeDownload,
       }));
 
       toast.success('Download deleted');

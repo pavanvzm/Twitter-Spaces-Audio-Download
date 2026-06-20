@@ -79,8 +79,22 @@ class HomeViewModel @Inject constructor(
                 return
             }
 
-            val space = spaceRepository.getSpaceMetadata(parseResult.spaceId)
-            _uiState.update { it.copy(isValidating = false, spaceInfo = space) }
+            // Fetch space metadata - returns Result
+            val result = spaceRepository.getSpaceMetadata(parseResult.spaceId)
+            
+            result.fold(
+                onSuccess = { space ->
+                    _uiState.update { it.copy(isValidating = false, spaceInfo = space) }
+                },
+                onFailure = { error ->
+                    _uiState.update { 
+                        it.copy(
+                            isValidating = false,
+                            error = error.message ?: "Failed to fetch Space"
+                        )
+                    }
+                }
+            )
         } catch (e: Exception) {
             _uiState.update { 
                 it.copy(

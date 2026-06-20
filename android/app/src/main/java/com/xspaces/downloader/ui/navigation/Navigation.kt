@@ -8,7 +8,6 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
-import androidx.navigation.compose.screen
 import com.xspaces.downloader.ui.screens.DownloadsScreen
 import com.xspaces.downloader.ui.screens.HomeScreen
 import com.xspaces.downloader.ui.screens.LoginScreen

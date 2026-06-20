@@ -93,6 +93,8 @@ async function acquireGuestToken() {
     });
 
     if (!response.ok) {
+      const text = await response.text();
+      logger.error(`Guest token failed: ${response.status} - ${text.substring(0, 200)}`);
       throw new Error(`Guest token failed: ${response.status}`);
     }
 
@@ -189,6 +191,13 @@ export async function revokeToken(accessToken) {
   }
 }
 
+// Query IDs for GraphQL endpoints - these are periodically rotated by X
+// The underscore version is the current stable query
+const QUERY_IDS = {
+  AUDIO_SPACE_BY_ID: 'zMbdEMdMLmsp0ZHRV6yH9g', // AudioSpaceById
+  AUDIO_SPACE: '4bwfc0Ck6BZEO8Jjg3bUWQ', // AudioSpace (for live)
+};
+
 /**
  * Fetch Space metadata using internal GraphQL API
  * 
@@ -198,9 +207,10 @@ export async function revokeToken(accessToken) {
  */
 export async function fetchSpaceMetadata(accessToken, spaceId) {
   const guestToken = await getGuestToken();
+  const queryId = QUERY_IDS.AUDIO_SPACE_BY_ID;
 
   const query = {
-    queryId: 'AvGxhZ_6dR6J-g', // This would need to be updated - X rotates these
+    queryId,
     variables: {
       id: spaceId,
       isMetatagsQuery: false,
@@ -224,52 +234,69 @@ export async function fetchSpaceMetadata(accessToken, spaceId) {
   };
 
   try {
+    logger.info(`Fetching metadata for Space: ${spaceId}`);
+    
     const response = await fetch(
-      `${WEB_API_BASE}/graphql/AvGxhZ_6dR6J-g/AudioSpaceById`,
+      `${WEB_API_BASE}/graphql/${queryId}/AudioSpaceById`,
       {
         method: 'POST',
         headers: {
           ...getInternalHeaders(guestToken),
-          'Authorization': `Bearer ${accessToken}`,
           'x-twitter-auth-type': 'OAuth2Session',
           'x-twitter-active-user': 'yes',
         },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify(query),
       }
     );
 
     if (response.status === 401) {
-      const error = new Error('Unauthorized');
+      const error = new Error('Unauthorized - Space may be private');
       error.status = 401;
       throw error;
     }
 
+    if (response.status === 403) {
+      const error = new Error('Access denied - authentication required');
+      error.status = 403;
+      throw error;
+    }
+
     if (response.status === 429) {
-      const error = new Error('Rate limited');
+      const error = new Error('Rate limited by X API');
       error.status = 429;
       error.retryAfter = 60;
       throw error;
     }
 
     if (!response.ok) {
-      throw new Error(`GraphQL failed: ${response.status}`);
+      const text = await response.text();
+      logger.error(`GraphQL failed: ${response.status} - ${text.substring(0, 200)}`);
+      throw new Error(`GraphQL request failed: ${response.status}`);
     }
 
     const data = await response.json();
     
-    if (data.errors) {
-      logger.warn('GraphQL errors:', data.errors);
+    if (data.errors && data.errors.length > 0) {
+      logger.warn('GraphQL errors:', JSON.stringify(data.errors));
+      // Check if it's a query ID error (indicates rotation needed)
+      const queryIdError = data.errors.find(e => e.message?.includes('queryId') || e.message?.includes('Unexpected'));
+      if (queryIdError) {
+        const error = new Error('X API query ID has expired - needs update');
+        error.code = 'QUERY_ID_EXPIRED';
+        throw error;
+      }
     }
 
     const space = data?.data?.audioSpace;
     if (!space) {
+      logger.warn(`No audioSpace found for ID: ${spaceId}`);
       return null;
     }
 
     // Parse the response into our format
     return parseSpaceResponse(space);
   } catch (error) {
-    logger.error('Fetch Space metadata error:', error);
+    logger.error('Fetch Space metadata error:', error.message);
     throw error;
   }
 }
@@ -281,12 +308,27 @@ function parseSpaceResponse(space) {
   const metadata = space.metadata || {};
   const creators = space.creators?.users?.results || [];
   const participants = space.participants || {};
+  const rest = space.restoredBroadcast || {};
 
   const host = creators[0] || {};
 
+  // Extract the actual broadcast/restored data
+  const broadcastData = rest || metadata;
+  
+  // The liveArchiveUrl is the key - this is the HLS manifest URL
+  const streamUrl = metadata.liveArchiveUrl || 
+                    broadcastData.liveArchiveUrl ||
+                    broadcastData.audioSpaceMetadata?.liveArchiveUrl;
+
   return {
-    id: metadata.restoredBroadcastId || metadata.creator?.restoredBroadcastId,
-    title: metadata.title || 'Untitled Space',
+    id: metadata.restoredBroadcastId || 
+        rest?.restoredBroadcastId || 
+        space.restoredBroadcastId ||
+        metadata.creator?.restoredBroadcastId,
+    title: metadata.title || 
+           rest?.title || 
+           broadcastData.title || 
+           'Untitled Space',
     host: {
       id: host.id || '',
       name: host.name || 'Unknown Host',
@@ -294,9 +336,12 @@ function parseSpaceResponse(space) {
       avatarUrl: host.profile_image_url || '',
     },
     status: mapSpaceState(metadata.state),
-    startedAt: metadata.startedAt || null,
-    endedAt: metadata.endedAt || null,
-    duration: calculateDuration(metadata.startedAt, metadata.endedAt),
+    startedAt: metadata.startedAt || rest?.startedAt || null,
+    endedAt: metadata.endedAt || rest?.endedAt || null,
+    duration: calculateDuration(
+      metadata.startedAt || rest?.startedAt, 
+      metadata.endedAt || rest?.endedAt
+    ),
     participantCount: (participants.listeners?.count || 0) + 
                        (participants.speakers?.users?.results?.length || 0),
     speakers: (participants.speakers?.users?.results || []).map(u => ({
@@ -308,7 +353,7 @@ function parseSpaceResponse(space) {
     listeners: {
       count: participants.listeners?.count || 0,
     },
-    streamUrl: metadata.liveArchiveUrl || null,
+    streamUrl: streamUrl,
     thumbnailUrl: metadata.imageUrl || null,
   };
 }

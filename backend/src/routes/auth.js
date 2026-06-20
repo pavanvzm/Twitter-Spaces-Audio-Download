@@ -10,7 +10,7 @@ import express from 'express';
 import crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 import { validateToken, revokeToken, getUserProfile } from '../services/twitter.js';
-import { createSession, getSession, deleteSession, updateSessionTokens } from '../services/session.js';
+import { createSession, getSession, getSessionByToken, deleteSession, updateSessionTokens } from '../services/session.js';
 import { generateStateToken, verifyStateToken } from '../utils/crypto.js';
 import { logger } from '../utils/logger.js';
 import { authLimiter } from '../middleware/rateLimit.js';
@@ -330,42 +330,5 @@ router.post('/logout', async (req, res) => {
     res.json({ success: true });
   }
 });
-
-// In-memory session store (replace with Redis/DB in production)
-const sessions = new Map();
-const tokenToSession = new Map();
-
-async function createSession(id, data) {
-  sessions.set(id, data);
-  return data;
-}
-
-async function getSession(id) {
-  return sessions.get(id);
-}
-
-async function getSessionByToken(token) {
-  return tokenToSession.get(token);
-}
-
-async function updateSessionTokens(sessionId, tokens) {
-  const session = sessions.get(sessionId);
-  if (session) {
-    Object.assign(session, tokens);
-    
-    // Map token to session for quick lookup
-    if (tokens.accessToken) {
-      tokenToSession.set(tokens.accessToken, session);
-    }
-  }
-}
-
-async function deleteSession(id) {
-  const session = sessions.get(id);
-  if (session?.accessToken) {
-    tokenToSession.delete(session.accessToken);
-  }
-  sessions.delete(id);
-}
 
 export default router;

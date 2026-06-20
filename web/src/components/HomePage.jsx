@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Download, Link as LinkIcon, Loader2, AlertCircle, Info } from 'lucide-react';
 import { useDownloadStore } from '../hooks/useDownload';
-import api from '../utils/api';
+import { useSpaceFetcher } from '../hooks/useSpaceFetcher';
 import toast from 'react-hot-toast';
 
 function HomePage() {
@@ -10,82 +10,195 @@ function HomePage() {
   const [isValidating, setIsValidating] = useState(false);
   const [spaceInfo, setSpaceInfo] = useState(null);
   const [error, setError] = useState(null);
+  const [validationStatus, setValidationStatus] = useState('idle'); // idle, validating, valid, error
   
   const { startDownload, activeDownload, isDownloading } = useDownloadStore();
+  const { fetchSpace, loading: fetcherLoading } = useSpaceFetcher();
 
-  // Validate and parse URL
+  // Use ref for debounce timer - proper pattern
+  const debounceTimerRef = useRef(null);
+
+  // Extract Space ID from URL
+  const extractSpaceId = (inputUrl) => {
+    const urlPatterns = [
+      /twitter\.com\/i\/spaces\/([A-Za-z0-9]+)/,
+      /x\.com\/i\/spaces\/([A-Za-z0-9]+)/,
+    ];
+    
+    for (const pattern of urlPatterns) {
+      const match = inputUrl.match(pattern);
+      if (match && match[1]) {
+        return match[1];
+      }
+    }
+    return null;
+  };
+
+  // Validate and parse URL - fetches directly from Twitter in browser
   const validateUrl = async (spaceUrl) => {
     if (!spaceUrl.trim()) {
       setSpaceInfo(null);
       setError(null);
+      setValidationStatus('idle');
       return;
     }
 
-    // Basic URL validation - supports multiple formats
-    const urlPatterns = [
-      /twitter\.com\/i\/spaces\/([A-Za-z0-9]+)/,
-      /x\.com\/i\/spaces\/([A-Za-z0-9]+)/,
-      /twitter\.com\/.*\/status\/\d+\/spaces/,
-    ];
-    
-    let spaceId = null;
-    for (const pattern of urlPatterns) {
-      const match = spaceUrl.match(pattern);
-      if (match && match[1]) {
-        spaceId = match[1];
-        break;
-      }
-    }
-
+    const spaceId = extractSpaceId(spaceUrl);
     if (!spaceId) {
       setError('Invalid Space URL. Use format: twitter.com/i/spaces/XXXXX');
       setSpaceInfo(null);
+      setValidationStatus('error');
       return;
     }
 
     setIsValidating(true);
     setError(null);
+    setValidationStatus('validating');
 
     try {
-      // Fetch space metadata directly
-      const metadataResponse = await api.get(`/spaces/${spaceId}`);
-      setSpaceInfo(metadataResponse.data);
+      // Fetch directly from Twitter using browser's authentication
+      const metadata = await fetchSpace(spaceId);
+      setSpaceInfo(metadata);
+      setValidationStatus('valid');
+      setError(null);
     } catch (err) {
-      if (err.response?.status === 404) {
-        setError('Space not found, private, or still live');
-      } else if (err.response?.status === 429) {
+      const errorMessage = err.message;
+      
+      if (errorMessage.includes('Not logged in')) {
+        setError('Please log in to X in another tab first, then try again.');
+      } else if (errorMessage.includes('private')) {
+        setError('This Space is private and cannot be accessed.');
+      } else if (errorMessage.includes('not found') || errorMessage.includes('invalid')) {
+        setError('Space not found or does not exist.');
+      } else if (errorMessage.includes('rate')) {
         setError('Too many requests. Please wait a moment.');
       } else {
-        setError(err.response?.data?.error || 'Failed to fetch Space');
+        setError(errorMessage || 'Failed to fetch Space. Please try again.');
       }
       setSpaceInfo(null);
+      setValidationStatus('error');
     } finally {
       setIsValidating(false);
     }
   };
 
   // Debounced URL validation
-  const debounceTimerRef = { current: null };
-  
   const handleUrlChange = (e) => {
     const value = e.target.value;
     setUrl(value);
-    setError(null);
     
-    clearTimeout(debounceTimerRef.current);
-    debounceTimerRef.current = setTimeout(() => validateUrl(value), 800);
+    // Clear previous timer
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+    
+    // Clear error when typing
+    if (error) {
+      setError(null);
+      setValidationStatus('idle');
+    }
+    
+    // Don't validate empty input
+    if (!value.trim()) {
+      setSpaceInfo(null);
+      setValidationStatus('idle');
+      return;
+    }
+
+    // Quick pattern check for immediate feedback
+    const quickCheck = /twitter\.com\/i\/spaces\/[A-Za-z0-9]+|x\.com\/i\/spaces\/[A-Za-z0-9]+/.test(value);
+    if (!quickCheck) {
+      setValidationStatus('error');
+      setError('Invalid URL format');
+      return;
+    }
+
+    setValidationStatus('validating');
+    
+    // Debounce the actual API call
+    debounceTimerRef.current = setTimeout(() => {
+      validateUrl(value);
+    }, 800);
   };
 
-  // Start download
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, []);
+
+  // Start download - uses browser to download directly from X
   const handleDownload = async () => {
-    if (!spaceInfo) return;
+    if (!spaceInfo || !spaceInfo.streamUrl) {
+      toast.error('No audio available for this Space');
+      return;
+    }
+
+    if (spaceInfo.status === 'live') {
+      toast.error('Cannot download live Spaces');
+      return;
+    }
+
+    toast.loading('Downloading audio...', { id: 'download' });
 
     try {
-      await startDownload(spaceInfo.id, format);
+      // Download directly in browser using the stream URL
+      const response = await fetch(spaceInfo.streamUrl, {
+        credentials: 'include',
+      });
+
+      if (!response.ok) {
+        throw new Error(`Download failed: ${response.status}`);
+      }
+
+      const blob = await response.blob();
+      
+      // Create download link
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = `${spaceInfo.title || 'space'}.m4a`.replace(/[^a-zA-Z0-9._-]/g, '_');
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(downloadUrl);
+
+      toast.success('Download complete!', { id: 'download' });
+      
       setUrl('');
       setSpaceInfo(null);
     } catch (err) {
-      toast.error('Failed to start download');
+      console.error('Download error:', err);
+      toast.error(err.message || 'Download failed', { id: 'download' });
+    }
+  };
+
+  // Get status icon for validation feedback
+  const getStatusIcon = () => {
+    switch (validationStatus) {
+      case 'validating':
+        return <Loader2 className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 text-blue-400 animate-spin" />;
+      case 'valid':
+        return (
+          <div className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-green-500 flex items-center justify-center">
+            <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+            </svg>
+          </div>
+        );
+      case 'error':
+        return (
+          <div className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-red-500 flex items-center justify-center">
+            <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </div>
+        );
+      default:
+        return null;
     }
   };
 
@@ -116,13 +229,18 @@ function HomePage() {
                 value={url}
                 onChange={handleUrlChange}
                 placeholder="https://twitter.com/i/spaces/1RDxlkAORPVJL"
-                className="input-field pl-12"
+                className={`input-field pl-12 pr-12 ${
+                  validationStatus === 'error' ? 'border-red-500' : 
+                  validationStatus === 'valid' ? 'border-green-500' : ''
+                }`}
                 disabled={isDownloading}
               />
-              {isValidating && (
-                <Loader2 className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 animate-spin" />
-              )}
+              {getStatusIcon()}
             </div>
+            {/* Validation hint */}
+            {url && validationStatus === 'validating' && !spaceInfo && !error && (
+              <p className="text-xs text-gray-500 mt-1">Checking Space...</p>
+            )}
           </div>
 
           {/* Format selector */}
@@ -156,7 +274,10 @@ function HomePage() {
           {error && (
             <div className="flex items-start gap-2 p-4 bg-red-900/20 border border-red-800 rounded-lg">
               <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
-              <p className="text-red-400 text-sm">{error}</p>
+              <div>
+                <p className="text-red-400 text-sm font-medium">Error</p>
+                <p className="text-red-400/80 text-sm">{error}</p>
+              </div>
             </div>
           )}
 
@@ -164,12 +285,16 @@ function HomePage() {
           {spaceInfo && (
             <div className="p-4 bg-gray-800/50 border border-gray-700 rounded-lg">
               <div className="flex items-start gap-3">
-                {spaceInfo.host?.avatarUrl && (
+                {spaceInfo.host?.avatarUrl ? (
                   <img
                     src={spaceInfo.host.avatarUrl}
                     alt={spaceInfo.host.name}
                     className="w-10 h-10 rounded-full"
                   />
+                ) : (
+                  <div className="w-10 h-10 rounded-full bg-gray-700 flex items-center justify-center">
+                    <span className="text-lg">👤</span>
+                  </div>
                 )}
                 <div className="flex-1 min-w-0">
                   <h3 className="font-semibold text-white truncate">
@@ -203,7 +328,7 @@ function HomePage() {
               {/* Download button */}
               <button
                 onClick={handleDownload}
-                disabled={isDownloading || spaceInfo.status === 'live'}
+                disabled={isDownloading || spaceInfo.status === 'live' || !spaceInfo.streamUrl}
                 className="btn-x w-full mt-4"
               >
                 {isDownloading ? (
@@ -212,11 +337,19 @@ function HomePage() {
                     Downloading...
                   </>
                 ) : spaceInfo.status === 'live' ? (
-                  'Cannot download live Spaces'
+                  <>
+                    <span className="text-lg">🔴</span>
+                    Live Spaces cannot be downloaded
+                  </>
+                ) : !spaceInfo.streamUrl ? (
+                  <>
+                    <AlertCircle className="w-5 h-5" />
+                    Recording not available
+                  </>
                 ) : (
                   <>
                     <Download className="w-5 h-5" />
-                    Download {format.toUpperCase()}
+                    Download M4A
                   </>
                 )}
               </button>

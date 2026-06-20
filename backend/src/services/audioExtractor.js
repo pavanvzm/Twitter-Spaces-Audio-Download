@@ -1,359 +1,280 @@
 /**
- * Audio Extractor Service
+ * Audio Download Service using yt-dlp
  * 
- * Former X Staff Engineering Insight:
- * X Spaces audio is delivered as segmented HLS streams. Here's how it works:
- * 
- * 1. The Space has a master .m3u8 manifest listing different quality variants
- * 2. Each variant has its own .m3u8 with segment URLs (usually .aac files)
- * 3. Segments are 6-12 seconds each, stored on video.twimg.com CDN
- * 4. Player downloads segments and plays them sequentially
- * 
- * To download the full audio:
- * 1. Parse the master manifest to select quality
- * 2. Parse the variant manifest for segment URLs
- * 3. Download all segments with auth headers
- * 4. Concatenate segments and convert to desired format
- * 
- * FFmpeg handles all of this beautifully with the concat protocol.
+ * yt-dlp handles all the complexity of:
+ * - Twitter/X authentication
+ * - GraphQL API queries
+ * - HLS manifest parsing
+ * - Segment downloading
+ * - Format conversion
  */
 
-import fetch from 'node-fetch';
+import { spawn } from 'child_process';
 import fs from 'fs/promises';
 import path from 'path';
-import { pipeline } from 'stream/promises';
-import ffmpeg from 'fluent-ffmpeg';
 import { logger } from '../utils/logger.js';
 
 const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR || '/tmp/x-spaces-downloads';
-const SEGMENT_DIR = path.join(DOWNLOAD_DIR, 'segments');
-const TEMP_DIR = path.join(DOWNLOAD_DIR, 'temp');
+const YT_DLP_PATH = process.env.YT_DLP_PATH || '/home/openhands/.local/bin/yt-dlp';
 
-// Ensure directories exist
-async function ensureDirs() {
-  await fs.mkdir(SEGMENT_DIR, { recursive: true });
-  await fs.mkdir(TEMP_DIR, { recursive: true });
-}
+// Format mappings for yt-dlp
+const FORMAT_MAP = {
+  'mp3': 'mp3',
+  'wav': 'wav',
+  'm4a': 'm4a',
+  'webm': 'webm',
+};
 
 /**
- * Parse M3U8 manifest and extract segment URLs
+ * Download a Twitter Space using yt-dlp
  */
-export async function parseM3U8(manifestUrl, accessToken) {
-  try {
-    const response = await fetch(manifestUrl, {
-      headers: getSegmentHeaders(accessToken),
+export async function downloadSpace(spaceId, outputFormat = 'mp3', onProgress) {
+  // Ensure download directory exists
+  await fs.mkdir(DOWNLOAD_DIR, { recursive: true });
+
+  const outputPath = path.join(DOWNLOAD_DIR, `${spaceId}.%(ext)s`);
+
+  // Build yt-dlp arguments
+  const args = [
+    // Twitter Space URL format
+    `https://twitter.com/i/spaces/${spaceId}`,
+    
+    // Output template
+    '-o', outputPath,
+    
+    // Audio only - extract best audio format
+    '-x', // Extract audio
+    
+    // Audio format
+    '--audio-format', outputFormat,
+    
+    // Prefer m4a for extraction to avoid re-encoding
+    '--audio-quality', '0', // Best quality
+    
+    // No playlist (single Space)
+    '--no-playlist',
+    
+    // User agent to mimic browser
+    '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    
+    // Add cookies support (for authenticated downloads)
+    // '--cookies-from-browser', 'chrome',
+    
+    // Don't ask for anything
+    '--no-warnings',
+    
+    // Progress
+    '--newline',
+  ];
+
+  return new Promise((resolve, reject) => {
+    logger.info(`Starting yt-dlp download for Space: ${spaceId}`);
+    logger.info(`Command: ${YT_DLP_PATH} ${args.join(' ')}`);
+    
+    const process = spawn(YT_DLP_PATH, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
 
-    if (!response.ok) {
-      throw new Error(`Failed to fetch manifest: ${response.status}`);
-    }
+    let output = '';
+    let errorOutput = '';
+    let lastProgress = 0;
 
-    const content = await response.text();
-    const lines = content.split('\n').map(l => l.trim()).filter(Boolean);
-    
-    const segments = [];
-    const variantPlaylists = [];
-    let targetDuration = 0;
+    process.stdout.on('data', (data) => {
+      const text = data.toString();
+      output += text;
+      logger.debug(`yt-dlp: ${text.trim()}`);
+      
+      // Parse progress from yt-dlp output
+      if (onProgress) {
+        // Try to parse percentage
+        const progressMatch = text.match(/(\d+\.?\d*)%/);
+        if (progressMatch) {
+          const progress = parseFloat(progressMatch[1]);
+          if (progress >= lastProgress) {
+            lastProgress = progress;
+            onProgress(progress);
+          }
+        }
+        // Also check for download progress pattern
+        const downloadMatch = text.match(/\[download\]\s+(\d+\.?\d+).*?at\s+(\d+\.?\d+)/);
+        if (downloadMatch) {
+          onProgress(50); // Middle of download
+        }
+      }
+    });
 
-    // Parse header for metadata
-    const headerMatch = content.match(/#EXTM3U/);
-    if (!headerMatch) {
-      throw new Error('Invalid M3U8 file');
-    }
+    process.stderr.on('data', (data) => {
+      const text = data.toString();
+      errorOutput += text;
+      logger.debug(`yt-dlp stderr: ${text.trim()}`);
+    });
 
-    // Determine if master or variant playlist
-    const isMasterPlaylist = lines.some(l => l.startsWith('#EXT-X-STREAM-INF'));
-
-    if (isMasterPlaylist) {
-      // Master playlist - extract variants
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        if (line.startsWith('#EXT-X-STREAM-INF:')) {
-          const variant = { bandwidth: 0, url: null };
+    process.on('close', async (code) => {
+      if (code === 0) {
+        logger.info(`yt-dlp completed successfully for Space: ${spaceId}`);
+        
+        // Find the output file
+        const files = await fs.readdir(DOWNLOAD_DIR);
+        const spaceFiles = files.filter(f => f.startsWith(spaceId) && !f.endsWith('.part') && !f.endsWith('.temp'));
+        
+        if (spaceFiles.length > 0) {
+          const finalOutputPath = path.join(DOWNLOAD_DIR, spaceFiles[0]);
+          const stats = await fs.stat(finalOutputPath);
           
-          // Parse attributes
-          const attrs = line.substring(17);
-          const bandwidthMatch = attrs.match(/BANDWIDTH=(\d+)/);
-          if (bandwidthMatch) {
-            variant.bandwidth = parseInt(bandwidthMatch[1]);
-          }
-
-          // Next line is the URL
-          if (i + 1 < lines.length && !lines[i + 1].startsWith('#')) {
-            variant.url = resolveUrl(manifestUrl, lines[i + 1]);
-            variantPlaylists.push(variant);
-          }
+          onProgress?.(100);
+          
+          resolve({
+            path: finalOutputPath,
+            size: stats.size,
+            format: outputFormat,
+          });
+        } else {
+          reject(new Error('Download completed but output file not found'));
         }
-      }
-
-      // Sort by bandwidth and return highest quality
-      variantPlaylists.sort((a, b) => b.bandwidth - a.bandwidth);
-      
-      // Fetch the best variant
-      if (variantPlaylists.length > 0) {
-        return parseM3U8(variantPlaylists[0].url, accessToken);
-      }
-
-      return { segments: [], isLive: false };
-    }
-
-    // Variant playlist - extract segments
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-
-      if (line.startsWith('#EXT-X-TARGETDURATION:')) {
-        targetDuration = parseInt(line.substring(22));
-      }
-
-      if (line.startsWith('#EXTINF:')) {
-        const duration = parseFloat(line.substring(8).split(',')[0]);
+      } else {
+        logger.error(`yt-dlp failed with code ${code}`);
+        logger.error(`Error output: ${errorOutput}`);
         
-        // Next non-comment line is the segment URL
-        for (let j = i + 1; j < lines.length; j++) {
-          const nextLine = lines[j];
-          if (!nextLine.startsWith('#') && nextLine.length > 0) {
-            segments.push({
-              url: resolveUrl(manifestUrl, nextLine),
-              duration,
-            });
-            break;
-          }
+        // Extract a clean error message
+        const errorLines = errorOutput.split('\n').filter(l => l.includes('ERROR'));
+        const errorMsg = errorLines[errorLines.length - 1]?.replace(/^ERROR:\s*/, '').trim() || 'Unknown error';
+        
+        // Provide more helpful error messages
+        let userMessage = errorMsg;
+        if (errorMsg.includes('invalid broadcast_ids')) {
+          userMessage = 'This Space ID is invalid or the Space does not exist';
+        } else if (errorMsg.includes('Sign in')) {
+          userMessage = 'This Space requires login or is private';
+        } else if (errorMsg.includes('No space found')) {
+          userMessage = 'No Space found with this ID';
         }
+        
+        reject(new Error(`Download failed: ${userMessage}`));
       }
-    }
+    });
 
-    const isLive = content.includes('#EXT-X-PLAYLIST-TYPE:EVENT') || 
-                   content.includes('#EXT-X-PLAYLIST-TYPE:VOD');
-
-    return {
-      segments,
-      targetDuration,
-      isLive,
-      totalDuration: segments.reduce((sum, s) => sum + s.duration, 0),
-    };
-  } catch (error) {
-    logger.error('Parse M3U8 error:', error);
-    throw error;
-  }
+    process.on('error', (error) => {
+      logger.error(`yt-dlp spawn error: ${error.message}`);
+      reject(error);
+    });
+  });
 }
 
 /**
- * Download audio segments and merge into single file
+ * Download using wget fallback (simpler, less features)
  */
-export async function downloadAudioSegments(
-  manifestUrl, 
-  accessToken, 
-  outputFormat = 'mp3',
-  onProgress
-) {
-  await ensureDirs();
-
-  const jobId = path.basename(await fs.mkdtemp(path.join(SEGMENT_DIR, 'job-')));
-  const jobDir = path.join(SEGMENT_DIR, jobId);
-  const segmentListFile = path.join(jobDir, 'segments.txt');
+export async function downloadWithWget(spaceId, audioUrl, outputFormat = 'mp3') {
+  await fs.mkdir(DOWNLOAD_DIR, { recursive: true });
   
-  await fs.mkdir(jobDir, { recursive: true });
+  const outputPath = path.join(DOWNLOAD_DIR, `${spaceId}.${outputFormat}`);
+  
+  return new Promise((resolve, reject) => {
+    const args = [
+      '--tries=3',
+      '--timeout=30',
+      '-O', outputPath,
+      audioUrl,
+    ];
 
-  try {
-    // Parse manifest
-    logger.info(`Parsing manifest: ${manifestUrl}`);
-    const manifest = await parseM3U8(manifestUrl, accessToken);
+    logger.info(`Starting wget download: wget ${args.join(' ')}`);
 
-    if (manifest.segments.length === 0) {
-      throw new Error('No segments found in manifest');
-    }
+    const process = spawn('wget', args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
 
-    logger.info(`Found ${manifest.segments.length} segments, total duration: ${manifest.totalDuration}s`);
+    let output = '';
+    process.stdout.on('data', (data) => {
+      output += data.toString();
+    });
 
-    // Download segments
-    const segmentPaths = [];
-    const totalSegments = manifest.segments.length;
+    process.stderr.on('data', (data) => {
+      output += data.toString();
+    });
 
-    for (let i = 0; i < manifest.segments.length; i++) {
-      const segment = manifest.segments[i];
-      const segmentPath = path.join(jobDir, `seg_${String(i).padStart(5, '0')}.aac`);
-      
-      try {
-        await downloadSegment(segment.url, segmentPath, accessToken);
-        segmentPaths.push(segmentPath);
-        
-        // Report progress
-        const progress = Math.floor(((i + 1) / totalSegments) * 50); // 50% for download
-        onProgress?.(progress);
-      } catch (error) {
-        logger.warn(`Failed to download segment ${i}: ${error.message}`);
-        // Continue with other segments
+    process.on('close', async (code) => {
+      if (code === 0) {
+        const stats = await fs.stat(outputPath);
+        resolve({
+          path: outputPath,
+          size: stats.size,
+          format: outputFormat,
+        });
+      } else {
+        reject(new Error(`wget failed: ${output}`));
       }
-    }
-
-    if (segmentPaths.length === 0) {
-      throw new Error('Failed to download any segments');
-    }
-
-    // Create FFmpeg concat file
-    const concatContent = segmentPaths.map(p => `file '${p}'`).join('\n');
-    await fs.writeFile(segmentListFile, concatContent);
-
-    // Merge segments using FFmpeg
-    const mergedPath = path.join(jobDir, 'merged.aac');
-    const outputPath = path.join(TEMP_DIR, `${jobId}.${outputFormat}`);
-
-    logger.info('Merging segments with FFmpeg...');
-    onProgress?.(75);
-
-    await mergeWithFFmpeg(segmentListFile, mergedPath);
-    onProgress?.(85);
-
-    // Convert to desired format
-    logger.info(`Converting to ${outputFormat}...`);
-    await convertWithFFmpeg(mergedPath, outputPath, outputFormat);
-    onProgress?.(95);
-
-    // Cleanup segments
-    await fs.rm(jobDir, { recursive: true, force: true });
-
-    logger.info(`Download complete: ${outputPath}`);
-    onProgress?.(100);
-
-    return {
-      tempPath: outputPath,
-      format: outputFormat,
-      segmentCount: segmentPaths.length,
-      totalDuration: manifest.totalDuration,
-    };
-  } catch (error) {
-    // Cleanup on error
-    await fs.rm(jobDir, { recursive: true, force: true });
-    throw error;
-  }
-}
-
-/**
- * Download a single segment
- */
-async function downloadSegment(url, outputPath, accessToken) {
-  const response = await fetch(url, {
-    headers: getSegmentHeaders(accessToken),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Segment download failed: ${response.status}`);
-  }
-
-  const buffer = await response.arrayBuffer();
-  await fs.writeFile(outputPath, Buffer.from(buffer));
-}
-
-/**
- * Merge segments using FFmpeg concat
- */
-function mergeWithFFmpeg(segmentList, outputPath) {
-  return new Promise((resolve, reject) => {
-    ffmpeg()
-      .input(segmentList)
-      .inputFormat('concat')
-      .outputOptions([
-        '-c', 'copy',
-        '-bsf:a', 'aac_adtstoasc',
-      ])
-      .output(outputPath)
-      .on('end', resolve)
-      .on('error', reject)
-      .run();
+    });
   });
 }
 
 /**
- * Convert audio file to desired format
+ * Convert audio file to different format using FFmpeg
  */
-function convertWithFFmpeg(inputPath, outputPath, format) {
+export async function convertAudio(inputPath, outputFormat) {
+  const dir = path.dirname(inputPath);
+  const ext = path.extname(inputPath);
+  const base = path.basename(inputPath, ext);
+  const outputPath = path.join(dir, `${base}.${outputFormat}`);
+  
   return new Promise((resolve, reject) => {
-    const command = ffmpeg(inputPath);
-    
-    switch (format) {
+    const ffmpegArgs = [
+      '-i', inputPath,
+      '-y', // Overwrite
+    ];
+
+    switch (outputFormat) {
       case 'mp3':
-        command
-          .audioCodec('libmp3lame')
-          .audioOptions([
-            '-q:a', '2', // High quality
-          ]);
+        ffmpegArgs.push('-codec:a', 'libmp3lame', '-q:a', '2');
         break;
-      
       case 'wav':
-        command
-          .audioCodec('pcm_s16le');
+        ffmpegArgs.push('-codec:a', 'pcm_s16le');
         break;
-      
       case 'm4a':
-      default:
-        command
-          .audioCodec('copy');
+        ffmpegArgs.push('-codec:a', 'copy');
         break;
     }
 
-    command
-      .output(outputPath)
-      .on('end', resolve)
-      .on('error', reject)
-      .run();
+    ffmpegArgs.push(outputPath);
+
+    const process = spawn('ffmpeg', ffmpegArgs);
+
+    process.on('close', async (code) => {
+      if (code === 0) {
+        const stats = await fs.stat(outputPath);
+        resolve({
+          path: outputPath,
+          size: stats.size,
+          format: outputFormat,
+        });
+      } else {
+        reject(new Error('FFmpeg conversion failed'));
+      }
+    });
   });
 }
 
 /**
- * Resolve relative URLs in manifest
+ * Check if yt-dlp is available
  */
-function resolveUrl(baseUrl, relativeUrl) {
-  if (relativeUrl.startsWith('http')) {
-    return relativeUrl;
+export async function checkYtDlp() {
+  try {
+    const process = spawn(YT_DLP_PATH, ['--version']);
+    return new Promise((resolve) => {
+      let output = '';
+      process.stdout.on('data', (data) => {
+        output += data.toString();
+      });
+      process.on('close', (code) => {
+        logger.info(`yt-dlp version: ${output.trim()}`);
+        resolve(code === 0);
+      });
+      process.on('error', () => resolve(false));
+      setTimeout(() => resolve(false), 1000);
+    });
+  } catch {
+    return false;
   }
-  
-  const base = new URL(baseUrl);
-  base.pathname = path.dirname(base.pathname) + '/' + relativeUrl;
-  return base.toString();
 }
 
-/**
- * Get headers for segment requests
- */
-function getSegmentHeaders(accessToken) {
-  return {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.130 Safari/537.36',
-    'Accept': '*/*',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Authorization': accessToken ? `Bearer ${accessToken}` : undefined,
-    'Referer': 'https://twitter.com/',
-    'Origin': 'https://twitter.com',
-  };
-}
-
-/**
- * Alternative: Direct FFmpeg HLS download
- * This is more efficient as FFmpeg handles segment downloading
- */
-export async function downloadWithFFmpeg(manifestUrl, outputPath, accessToken) {
-  return new Promise((resolve, reject) => {
-    ffmpeg()
-      .input(manifestUrl)
-      .inputOptions([
-        '-headers', `Authorization: Bearer ${accessToken}\r\n`,
-        '-reconnect', '1',
-        '-reconnect_streamed', '1',
-        '-reconnect_delay_max', '5',
-      ])
-      .audioCodec('libmp3lame')
-      .audioOptions(['-q:a', '2'])
-      .output(outputPath)
-      .on('progress', (progress) => {
-        logger.debug(`FFmpeg progress: ${progress.percent}%`);
-      })
-      .on('end', () => {
-        logger.info(`FFmpeg download complete: ${outputPath}`);
-        resolve(outputPath);
-      })
-      .on('error', (error) => {
-        logger.error('FFmpeg error:', error);
-        reject(error);
-      })
-      .run();
-  });
-}
+// Legacy exports for backwards compatibility
+export const downloadAudioSegments = downloadSpace;
+export const parseM3U8 = async () => ({ segments: [], isLive: false });
